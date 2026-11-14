@@ -1,0 +1,77 @@
+name: 데이터 갱신과 배포
+
+# 하루 3번 공공 API 에서 데이터를 받아 site/data/*.json 을 갱신하고 GitHub Pages 로 배포한다.
+# 인증키는 저장소 Settings → Secrets and variables → Actions 에 넣는다(코드에는 없음).
+
+on:
+  schedule:
+    # 한국 시간 10:10, 14:10, 19:10 (cron 은 UTC 기준: 01:10, 05:10, 10:10)
+    - cron: "10 1,5,10 * * *"
+  workflow_dispatch:          # Actions 탭에서 "Run workflow" 로 직접 실행
+  push:
+    branches: [main]
+
+permissions:
+  contents: write             # 갱신된 데이터를 저장소에 커밋
+  pages: write                # GitHub Pages 배포
+  id-token: write
+
+concurrency:
+  group: update-and-deploy
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: 파서·개인정보 가리기 검증
+        run: |
+          python3 tests/test_parser.py
+          python3 tests/test_privacy.py
+
+      - name: 데이터 수집
+        id: collect
+        continue-on-error: true      # 수집이 실패해도 직전 데이터로 배포는 계속한다
+        env:
+          KCISA_LOST_KEY: ${{ secrets.KCISA_LOST_KEY }}
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          KOPIS_KEY: ${{ secrets.KOPIS_KEY }}
+        run: python3 collector/collect.py
+
+      - name: 인증키가 결과물에 섞이지 않았는지 검사
+        env:
+          KCISA_LOST_KEY: ${{ secrets.KCISA_LOST_KEY }}
+          DATA_GO_KR_KEY: ${{ secrets.DATA_GO_KR_KEY }}
+          KOPIS_KEY: ${{ secrets.KOPIS_KEY }}
+        run: python3 tools/check_no_secrets.py
+
+      - name: 바뀐 데이터 저장(커밋)
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data
+          if git diff --cached --quiet; then
+            echo "바뀐 데이터가 없습니다."
+          else
+            git commit -m "데이터 갱신 $(TZ=Asia/Seoul date +'%Y-%m-%d %H:%M')"
+            git push || (git pull --rebase && git push)
+          fi
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - id: deploy
+        uses: actions/deploy-pages@v5
+
+      - name: 수집 실패 알림
+        if: steps.collect.outcome == 'failure'
+        run: |
+          echo "::error::모든 데이터 소스 수집에 실패했습니다. 사이트는 직전 데이터로 유지됩니다. 인증키(Secrets)와 API 상태를 확인하세요."
+          exit 1
