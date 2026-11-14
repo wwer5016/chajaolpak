@@ -426,16 +426,29 @@
 
   // KOPIS 공연 목록(선택 기능): shows.json 에 공연이 있을 때만 보인다
   function renderShows() {
-    const shows = (D.shows.shows || []).filter(s => IDX.venue[s.venue]);
+    // 이미 시작한 공연만(앞으로 열릴 공연은 아직 잃어버릴 일이 없다), 최근 것부터
+    const shows = (D.shows.shows || []).filter(s => IDX.venue[s.venue] && s.from <= TODAY)
+      .sort((a, b) => (b.to < TODAY ? b.to : TODAY).localeCompare(a.to < TODAY ? a.to : TODAY) || b.from.localeCompare(a.from));
     const box = $('#showChips');
     box.hidden = !shows.length;
+    const src = $('#kopisSrc');
+    if (src) src.hidden = !shows.length;
     if (!shows.length) return;
-    box.innerHTML = '<span class="tg" style="flex:none;font-weight:700">최근 공연</span>' + shows.slice(0, 30).map((s, i) =>
-      `<button class="chip" type="button" data-i="${i}" title="${esc(s.name)}">${esc(s.name.length > 18 ? s.name.slice(0, 17) + '…' : s.name)} <span class="n">${s.from.slice(5).replace('-', '.')}${s.to !== s.from ? '~' + s.to.slice(5).replace('-', '.') : ''}</span></button>`).join('');
+    const md = d => d.slice(5).replace('-', '.').replace(/^0/, '').replace('.0', '.');
+    box.innerHTML = '<span class="tg-label">최근 공연</span>' + shows.slice(0, 30).map((s, i) => {
+      const v = shortVenue(IDX.venue[s.venue].name).replace('·뮤즈라이브', '');
+      const nm = s.name.length > 16 ? s.name.slice(0, 15) + '…' : s.name;
+      return `<button class="chip" type="button" data-i="${i}" title="${esc(s.name)} · ${esc(IDX.venue[s.venue].name)}"><b class="sv">${esc(v)}</b> ${esc(nm)} <span class="n">${md(s.from)}${s.to !== s.from ? '~' + md(s.to) : ''}</span></button>`;
+    }).join('');
+    if (!src) box.insertAdjacentHTML('afterend',
+      '<p class="hint kopis-src" id="kopisSrc">공연 목록 출처: (재)예술경영지원센터 공연예술통합전산망(<a href="https://www.kopis.or.kr" target="_blank" rel="noopener">www.kopis.or.kr</a>)</p>');
     box.onclick = e => {
       const b = e.target.closest('.chip'); if (!b) return;
       const s = shows[+b.dataset.i];
-      state.venueDate = s.from > TODAY ? TODAY : s.from; $('#venueDate').value = state.venueDate; markQuick();
+      // 공연 첫날부터(오래 하는 공연은 최근 2주만)
+      const d = s.from < addDays(TODAY, -14) && s.to >= addDays(TODAY, -14) ? addDays(TODAY, -14) : s.from;
+      state.venueDate = d > TODAY ? TODAY : d; $('#venueDate').value = state.venueDate; markQuick();
+      $$('#showChips .chip').forEach(x => x.classList.toggle('on', x === b));
       if (state.venue !== s.venue) selectVenue(s.venue); else render();
     };
   }
@@ -738,6 +751,7 @@
         ${row('올림픽공원 유실물', lost, `한국체육산업개발㈜ · 문화공공데이터광장 / 물건 ${D.lost.items.length}건${D.lost.transfer_cutoff ? ` · ${D.lost.transfer_cutoff}까지 습득분은 경찰서 이관` : ''}`)}
         ${row('주변 역 습득물', pol, `경찰청 포털기관 습득물정보 · 공공데이터포털 / ${D.police.items.length}건`)}
         <tr><th>공연장 이름</th><td>올림픽공원 공연정보(한국체육산업개발㈜)의 공연장 표기를 표준 이름으로 정리해 사용</td></tr>
+        ${(D.shows.shows || []).length ? `<tr><th>최근 공연</th><td>출처: (재)예술경영지원센터 공연예술통합전산망(<a href="https://www.kopis.or.kr" target="_blank" rel="noopener">www.kopis.or.kr</a>)<br><small>${fmtStamp(D.shows.updated)} 갱신 · 올림픽공원 공연 ${D.shows.shows.length}건</small></td></tr>` : ''}
         <tr><th>지도</th><td>© OpenStreetMap 기여자 (ODbL)</td></tr>
       </table>
       <p>데이터는 하루 3번 자동으로 갱신됩니다. 실제 보관 여부는 반드시 안내센터에 전화로 확인하세요.</p>

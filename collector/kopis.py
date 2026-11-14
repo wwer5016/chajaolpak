@@ -3,11 +3,14 @@
 KOPIS_KEY 가 있을 때만 collect.py 가 이 모듈을 부른다. 키가 없으면 사이트의 '최근 공연' 줄은 숨겨진다.
 올림픽공원 공연정보 API 가 2024년 이후 갱신되지 않아, 최근 공연은 KOPIS 로 보완한다.
 
-주의: 2026-11 현재 KOPIS 키가 없어 실제 호출로 검증하지 못했다. 응답 형식이 다르면 FetchError 로 끝나고
-사이트의 다른 기능에는 영향이 없다.
+확인한 사실(2026-11-15 실제 호출):
+  - 공연목록(pblprfr)의 공연시설명(fcltynm)은 "올림픽공원"까지만 나온다(어느 공연장인지 없음).
+  - 그래서 "올림픽공원" 공연만 골라 공연상세(pblprfr/{공연ID})를 한 번 더 불러 공연장 이름을 얻는다.
+이용 조건: 서비스에 "출처: (재)예술경영지원센터 공연예술통합전산망(www.kopis.or.kr)"을 표시해야 한다.
 """
 from __future__ import annotations
 
+import re
 import xml.etree.ElementTree as ET
 from datetime import timedelta
 
@@ -21,6 +24,7 @@ ROWS = 100
 LOOK_BACK_DAYS = 60
 LOOK_AHEAD_DAYS = 7
 WINDOW_DAYS = 30       # KOPIS 는 한 번에 조회할 수 있는 기간이 31일 이내
+MAX_DETAIL = 80        # 한 번 수집에서 공연상세를 부르는 최대 횟수(호출량 제한 대비)
 
 
 def _ymd(s: str) -> str:
@@ -28,23 +32,34 @@ def _ymd(s: str) -> str:
     return s if len(s) == 10 else ""
 
 
+def _dbs(body: bytes) -> list[dict]:
+    try:
+        root = ET.fromstring(body)
+    except ET.ParseError as e:
+        raise FetchError(f"KOPIS 응답 XML 해석 실패: {e}")
+    return [{c.tag: (c.text or "").strip() for c in db} for db in root.findall(".//db")]
+
+
 def _fetch_window(key: str, start, end) -> list[dict]:
     out = []
     for page in range(1, 11):
-        body = http_get(BASE, {
+        dbs = _dbs(http_get(BASE, {
             "service": key, "stdate": f"{start:%Y%m%d}", "eddate": f"{end:%Y%m%d}",
             "cpage": page, "rows": ROWS, "signgucode": SIGNGU, "signgucodesub": SIGNGU_SUB,
-        }, timeout=60, retries=3)
-        try:
-            root = ET.fromstring(body)
-        except ET.ParseError as e:
-            raise FetchError(f"KOPIS 응답 XML 해석 실패: {e}")
-        dbs = root.findall(".//db")
-        for db in dbs:
-            out.append({c.tag: (c.text or "").strip() for c in db})
+        }, timeout=60, retries=3))
+        out.extend(dbs)
         if len(dbs) < ROWS:
             break
     return out
+
+
+def _detail(key: str, sid: str) -> dict:
+    dbs = _dbs(http_get(f"{BASE}/{sid}", {"service": key}, timeout=60, retries=3))
+    return dbs[0] if dbs else {}
+
+
+def _is_olympic_park(fac: str) -> bool:
+    return "올림픽공원" in re.sub(r"\s+", "", fac or "")
 
 
 def collect() -> list[dict]:
@@ -60,30 +75,35 @@ def collect() -> list[dict]:
         end = min(cur + timedelta(days=WINDOW_DAYS), stop)
         rows.extend(_fetch_window(key, cur, end))
         cur = end + timedelta(days=1)
-    seen = set()
-    shows = []
+
+    seen: set[str] = set()
+    shows: list[dict] = []
+    unknown_halls: dict[str, int] = {}
+    n_park = n_detail = 0
     for r in rows:
         sid = r.get("mt20id", "")
         fac = r.get("fcltynm", "")
-        if not sid or sid in seen or "올림픽공원" not in fac.replace(" ", "") and normalize_venue(fac) is None:
-            continue
-        venue = normalize_venue(fac)
-        if not venue:
+        if not sid or sid in seen or not _is_olympic_park(fac):
             continue
         seen.add(sid)
+        n_park += 1
+        venue = normalize_venue(fac)                 # 목록에 공연장까지 적혀 오는 경우
+        hall = fac
+        if not venue and n_detail < MAX_DETAIL:
+            n_detail += 1
+            d = _detail(key, sid)
+            hall = d.get("fcltynm", "") or fac      # 예: "올림픽공원 (KSPO DOME)"
+            venue = normalize_venue(hall)
+        if not venue:
+            unknown_halls[hall] = unknown_halls.get(hall, 0) + 1
+            continue
         d1, d2 = _ymd(r.get("prfpdfrom", "")), _ymd(r.get("prfpdto", ""))
         if not d1:
             continue
         shows.append({"id": sid, "name": r.get("prfnm", ""), "venue": venue, "from": d1, "to": d2 or d1,
                       "genre": r.get("genrenm", "")})
     shows.sort(key=lambda s: s["from"], reverse=True)
-    log(f"  KOPIS: 송파구 공연 {len(rows)}건 중 올림픽공원 공연장 {len(shows)}건")
-    # 점검용: 공연시설·지역 이름 분포(공개 정보, 키 없음)
-    fac_cnt: dict[str, int] = {}
-    for r in rows:
-        k = f"{r.get('area', '')} | {r.get('fcltynm', '')}"
-        fac_cnt[k] = fac_cnt.get(k, 0) + 1
-    log("  KOPIS 공연시설: " + ", ".join(f"{k}({v})" for k, v in sorted(fac_cnt.items(), key=lambda kv: -kv[1])[:25]))
-    if rows:
-        log("  KOPIS 첫 항목 필드: " + ", ".join(sorted(rows[0].keys())))
+    log(f"  KOPIS: 송파구 공연 {len(rows)}건 → 올림픽공원 {n_park}건(상세 조회 {n_detail}건) → 공연장 확인 {len(shows)}건")
+    if unknown_halls:
+        log("  KOPIS 공연장을 정하지 못한 공연시설: " + ", ".join(f"{k}({v})" for k, v in unknown_halls.items()))
     return shows

@@ -68,9 +68,9 @@ class FetchError(Exception):
 
 
 def _redact(url: str) -> str:
-    """로그용: serviceKey 값을 가린다."""
+    """로그용: 인증키 값(serviceKey, KOPIS 의 service 등)을 가린다."""
     parts = urllib.parse.urlsplit(url)
-    q = [(k, "***" if k.lower() == "servicekey" else v)
+    q = [(k, "***" if k.lower() in ("servicekey", "service", "key", "apikey", "api_key") else v)
          for k, v in urllib.parse.parse_qsl(parts.query, keep_blank_values=True)]
     return urllib.parse.urlunsplit(parts._replace(query=urllib.parse.urlencode(q)))
 
