@@ -53,9 +53,29 @@ def _fetch_window(key: str, start, end) -> list[dict]:
     return out
 
 
+_DETAIL_ERR: list[str] = []
+
+
 def _detail(key: str, sid: str) -> dict:
-    dbs = _dbs(http_get(f"{BASE}/{sid}", {"service": key}, timeout=60, retries=3))
-    return dbs[0] if dbs else {}
+    """공연상세. 실패하면 빈 dict(그 공연만 건너뛴다). 첫 실패의 응답 앞부분은 점검용으로 남긴다."""
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    for base in (BASE, BASE.replace("http://", "https://")):
+        url = f"{base}/{sid}?" + urllib.parse.urlencode({"service": key})
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "chajaolpak-collector/1.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                dbs = _dbs(r.read())
+            return dbs[0] if dbs else {}
+        except urllib.error.HTTPError as e:
+            if not _DETAIL_ERR:
+                body = e.read()[:300].decode("utf-8", "replace").replace(key, "***")
+                _DETAIL_ERR.append(f"{base.split('//')[0]} HTTP {e.code}: {body}")
+        except Exception as e:  # 타임아웃 등
+            if not _DETAIL_ERR:
+                _DETAIL_ERR.append(type(e).__name__)
+    return {}
 
 
 def _is_olympic_park(fac: str) -> bool:
@@ -106,4 +126,8 @@ def collect() -> list[dict]:
     log(f"  KOPIS: 송파구 공연 {len(rows)}건 → 올림픽공원 {n_park}건(상세 조회 {n_detail}건) → 공연장 확인 {len(shows)}건")
     if unknown_halls:
         log("  KOPIS 공연장을 정하지 못한 공연시설: " + ", ".join(f"{k}({v})" for k, v in unknown_halls.items()))
+    if _DETAIL_ERR:
+        log("  KOPIS 공연상세 오류 예: " + _DETAIL_ERR[0])
+    if n_park and not shows:
+        raise FetchError("올림픽공원 공연은 있는데 공연장을 하나도 정하지 못했습니다")
     return shows
