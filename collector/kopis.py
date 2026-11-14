@@ -78,4 +78,12 @@ def collect() -> list[dict]:
                       "genre": r.get("genrenm", "")})
     shows.sort(key=lambda s: s["from"], reverse=True)
     log(f"  KOPIS: 송파구 공연 {len(rows)}건 중 올림픽공원 공연장 {len(shows)}건")
+    # 점검용: 공연시설·지역 이름 분포(공개 정보, 키 없음)
+    fac_cnt: dict[str, int] = {}
+    for r in rows:
+        k = f"{r.get('area', '')} | {r.get('fcltynm', '')}"
+        fac_cnt[k] = fac_cnt.get(k, 0) + 1
+    log("  KOPIS 공연시설: " + ", ".join(f"{k}({v})" for k, v in sorted(fac_cnt.items(), key=lambda kv: -kv[1])[:25]))
+    if rows:
+        log("  KOPIS 첫 항목 필드: " + ", ".join(sorted(rows[0].keys())))
     return shows
