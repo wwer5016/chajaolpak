@@ -18,6 +18,8 @@ FILES = {
     "MarkerCluster.css": "https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css",
     "LICENSE-leaflet.txt": "https://unpkg.com/leaflet@1.9.4/LICENSE",
     "LICENSE-markercluster.txt": "https://unpkg.com/leaflet.markercluster@1.5.3/MIT-LICENCE.txt",
+    # QR 포스터(poster.html)용 — MIT 라이선스 문구가 파일 머리말에 들어 있다
+    "qrcode.js": "https://unpkg.com/qrcode-generator@1.4.4/qrcode.js",
 }
 
 

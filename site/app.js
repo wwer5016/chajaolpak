@@ -290,16 +290,20 @@
   }
 
   const badge = it => `<span class="badge ${it.status === 'keep' ? '' : it.status}">${STATUS[it.status]}</span>`;
-  function lostRow(it) {
+  function lostRow(it, extra = '') {
     const c = IDX.cat[it.cat] || { icon: '📦' };
     const p = it.place ? IDX.place[it.place] : null;
     // 원문에 표준 지점 이름이 그대로 들어 있으면 원문만, 아니면 "표준 지점 · 원문"
     const sq = s => String(s || '').replace(/\s+/g, '');
     const where = p ? (sq(it.place_raw).includes(sq(p.name)) ? it.place_raw : `${p.name} · ${it.place_raw}`) : (it.place_raw || '공원 내');
+    // 보관 중인데 1개월(보관 기한)이 지났으면 이미 경찰서로 넘어갔을 수 있다
+    if ((it.status === 'keep' || it.status === 'contacted') && dayDiff(TODAY, it.date) > 30) {
+      extra = `<em class="tag unk" title="보관 기한(1개월)이 지나 경찰서로 넘어갔을 수 있습니다">기한 지남</em>` + extra;
+    }
     return `<li><button class="item" type="button" data-id="${it.id}">
       <span class="ic">${c.icon}</span>
       <span class="tx"><span class="t1">${esc(it.name)}${it.qty && it.qty !== '1' ? ` <small>×${esc(it.qty)}</small>` : ''}</span>
-        <span class="t2">${esc(where)}</span></span>
+        <span class="t2">${extra}${esc(where)}</span></span>
       <span class="rt">${badge(it)}<span class="ago">${fmtDate(it.date).replace(/\(.\)/, '')} · ${ago(it.date)}</span></span>
     </button></li>`;
   }
@@ -330,11 +334,11 @@
       desc = vn
         ? `${esc(vn.name)} 반경 ${vn.radius}m 안 지점(${vn.near.slice(0, 5).map(id => esc(IDX.place[id].name)).join(', ')}${vn.near.length > 5 ? ' 등' : ''})에서 <b>${fmtDate(state.venueDate)} 이후</b> 습득된 물건입니다.`
         : '습득 장소가 적힌 물건입니다. 핀은 “○○ 부근”을 뜻하는 대략적인 위치입니다.';
-      html = cur.located.map(lostRow).join('') ||
+      html = cur.located.map(it => lostRow(it)).join('') ||
         `<li class="empty">${vn ? '이 공연장 주변에서 그날 이후 접수된 습득물이 없습니다.<br>‘위치 불명’과 ‘가까운 역’ 탭도 확인해 보세요.' : '조건에 맞는 습득물이 없습니다.<br>기간을 넓히거나 ‘경찰서 이관 보기’를 켜 보세요.'}</li>`;
     } else if (state.tab === 'unknown') {
       desc = '“공원 내”처럼 지점이 적히지 않아 지도에 표시할 수 없는 물건입니다. 공원 어디서든 잃어버렸다면 함께 확인하세요.';
-      html = cur.unknown.map(lostRow).join('') || '<li class="empty">위치 불명으로 접수된 습득물이 없습니다.</li>';
+      html = cur.unknown.map(it => lostRow(it)).join('') || '<li class="empty">위치 불명으로 접수된 습득물이 없습니다.</li>';
     } else {
       const s = state.station ? IDX.station[state.station] : null;
       desc = (s ? `<b>${esc(s.name)}</b>(${esc(s.lines)})에 보관 중인 습득물입니다. <a href="#" data-act="allStations">모든 역 보기</a>`
@@ -342,6 +346,11 @@
         ' 이름 등 개인정보는 가렸습니다.';
       html = stItems.map(policeRow).join('') ||
         `<li class="empty">${!vn && !state.showStations ? '‘주변 역 습득물’을 켜면 표시됩니다.' : '조건에 맞는 역 보관 습득물이 없습니다.'}</li>`;
+    }
+    // 데이터 기준일: 공원 공고가 언제까지 반영됐는지 늘 보여 준다(실시간이 아니라는 점을 분명히)
+    const last = lastNoticeDate();
+    if (last && state.tab !== 'station') {
+      desc = `<span class="fresh">📅 공원 공고 <b>${fmtDate(last).replace(/\(.\)/, '')}</b>까지 반영${D.lost.updated ? ` · ${fmtStamp(D.lost.updated)} 확인` : ''}</span>` + desc;
     }
     $('#sheetDesc').innerHTML = desc;
     $('#sheetDesc').hidden = !desc;
@@ -389,9 +398,7 @@
     inp.max = TODAY; inp.min = addDays(TODAY, -365);
     state.venueDate = addDays(TODAY, -7); inp.value = state.venueDate;
     inp.addEventListener('change', () => { if (inp.value) { state.venueDate = inp.value; markQuick(); render(); } });
-    const dow = new Date(ts(TODAY)).getUTCDay();
-    const quick = [['오늘', 0], ['어제', 1], ['지난 토요일', ((dow + 1) % 7) || 7], ['지난 일요일', dow || 7], ['1주 전', 7], ['2주 전', 14], ['한 달 전', 30]];
-    $('#quickDates').innerHTML = quick.map(([t, n]) => `<button class="chip" type="button" data-d="${addDays(TODAY, -n)}">${t}</button>`).join('');
+    $('#quickDates').innerHTML = quickDays().map(([t, n]) => `<button class="chip" type="button" data-d="${addDays(TODAY, -n)}">${t}</button>`).join('');
     $('#quickDates').addEventListener('click', e => {
       const b = e.target.closest('.chip'); if (!b) return;
       state.venueDate = b.dataset.d; inp.value = b.dataset.d; markQuick(); render();
@@ -473,9 +480,10 @@
   }
 
   /* ───────── 물품 상세 ───────── */
+  const DLG_BODY = { '#dlgItem': '#itemBody', '#dlgInfo': '#infoBody', '#dlgFind': '#findBody' };
   function showDlg(id, html) {
     const dlg = $(id);
-    $(id === '#dlgItem' ? '#itemBody' : '#infoBody').innerHTML = `<div class="dlg-body">${html}</div>`;
+    $(DLG_BODY[id]).innerHTML = `<div class="dlg-body">${html}</div>`;
     if (!dlg.open) dlg.showModal();
     dlg.scrollTop = 0;
   }
@@ -509,7 +517,7 @@
     }
     const tel = center && it.status !== 'returned' && it.status !== 'transferred'
       ? `<a class="btn" href="tel:${center.tel}">📞 ${esc(center.name)} ${esc(center.tel_text)}</a>` : '';
-    const mapBtn = p ? `<button class="btn line" type="button" id="btnGo">지도에서 위치 보기</button>` : '';
+    const mapBtn = (p ? `<button class="btn line" type="button" id="btnGo">지도에서 위치 보기</button>` : '') + shareBtn();
     showDlg('#dlgItem', `
       <h2><span class="ic">${c.icon}</span>${esc(it.name)}</h2>
       <div class="meta">${badge(it)}<span class="badge returned">${esc(c.label)}</span><span style="font-size:13px;color:var(--ink-3)">${ago(it.date)} 습득</span></div>
@@ -525,9 +533,11 @@
       ${guide}${tel}${mapBtn}
       <p class="src">출처: 올림픽공원 유실물 정보(한국체육산업개발㈜, 문화공공데이터광장)${it.posted ? ` · ${it.posted} 게시` : ''}<br>
       사진은 제공되지 않습니다. 실제 보관 여부는 안내센터에 확인하세요.</p>`);
+    bindShare('item', it.id, `${it.name} · ${it.place_raw || '올림픽공원'} (${fmtDate(it.date)} 습득)`);
     const go = $('#btnGo');
     if (go) go.onclick = () => {
       $('#dlgItem').close();
+      if ($('#dlgFind').open) $('#dlgFind').close();
       if (state.mode === 'stats') setMode('map');
       if (!isWide()) setSheet('peek');
       setTimeout(() => {
@@ -556,8 +566,150 @@
         <ol><li>아래 버튼으로 경찰민원24(옛 LOST112) 습득물 검색을 열고, 보관 장소 <b>${esc(it.dep)}</b>와 습득일로 찾아 사진과 연락처를 확인하세요.</li>
         <li>보관 기관(역 고객안전실·유실물센터)에 전화한 뒤 <b>신분증</b>을 가지고 방문하세요.</li></ol></div>
       <a class="btn blue" href="${POLICE_SEARCH_URL}" target="_blank" rel="noopener">경찰민원24 습득물 검색 열기</a>
+      ${shareBtn()}
       <p class="src">출처: 경찰청 포털기관 습득물정보(공공데이터포털). 품명에 들어 있는 이름·전화번호 등 개인정보는 가렸습니다.<br>
       역에서 일정 기간이 지나면 유실물센터나 경찰서로 옮겨질 수 있습니다.</p>`);
+    bindShare('p', it.id, `${it.name} · ${it.dep} 보관 (${fmtDate(it.date)} 습득)`);
+  }
+
+  /* ───────── 공유 링크 ─────────
+   * 물건마다 주소가 있다: …/chajaolpak/#item=<id> (공원), #p=<id> (주변 역). 링크를 열면 그 물건 상세가 바로 뜬다. */
+  const shareBtn = () => `<button class="btn line" type="button" id="btnShare">🔗 이 물건 링크 공유</button><p class="share-msg" id="shareMsg" hidden></p>`;
+  function shareUrl(kind, id) {
+    return location.origin + location.pathname + '#' + kind + '=' + encodeURIComponent(id);
+  }
+  function bindShare(kind, id, text) {
+    const b = $('#btnShare'); if (!b) return;
+    b.onclick = async () => {
+      const url = shareUrl(kind, id), msg = $('#shareMsg');
+      const say = t => { msg.textContent = t; msg.hidden = false; };
+      if (navigator.share) {
+        try { await navigator.share({ title: '찾아올팍 — 올림픽공원 습득물', text, url }); return; }
+        catch (e) { if (e && e.name === 'AbortError') return; }
+      }
+      try { await navigator.clipboard.writeText(url); say('링크를 복사했습니다. 문자나 메신저에 붙여 넣으세요.'); }
+      catch (e) { say(url); }     // 복사가 막힌 브라우저: 주소를 그대로 보여 준다
+    };
+  }
+  function openFromHash() {
+    const m = location.hash.match(/^#(item|p)=([^&]+)/);
+    if (!m) return;
+    const id = decodeURIComponent(m[2]);
+    const it = (m[1] === 'item' ? D.lost.items : D.police.items).find(x => x.id === id);
+    if (it) { (m[1] === 'item' ? openLost : openPolice)(it); return; }
+    showDlg('#dlgItem', `<h2>물건 정보를 찾을 수 없어요</h2>
+      <p>공유받은 물건이 목록에서 빠졌습니다. 주인에게 돌아갔거나, 보관 기간이 끝나 목록에서 내려갔을 수 있습니다.</p>
+      <div class="box go">평화의 광장 안내센터 <a href="tel:02-2180-3564">02-2180-3564~5</a><br>만남의 광장 안내센터 <a href="tel:02-2180-3566">02-2180-3566</a></div>`);
+  }
+
+  /* ───────── 내 물건 찾기(도우미) ─────────
+   * 품목·잃어버린 날·대략의 장소를 받아 '공원 안내센터 / 경찰서로 이관 / 근처 역' 세 갈래로 후보를 보여 준다. */
+  const FIND_WINDOW = 7;      // 잃어버린 날부터 며칠 안에 주운 물건까지 볼지
+  const NEAR_M = 450;         // 고른 장소에서 이 거리 안이면 '가까운 곳'
+  const LOST_REPORT_URL = 'https://minwon24.police.go.kr/cvlcpt/cvlcptGdInfo.do?cvlcptId=MW-001';
+  const find = { cats: new Set(), date: '', where: '' };
+
+  function quickDays() {
+    const dow = new Date(ts(TODAY)).getUTCDay();
+    return [['오늘', 0], ['어제', 1], ['지난 토요일', ((dow + 1) % 7) || 7], ['지난 일요일', dow || 7], ['1주 전', 7], ['2주 전', 14], ['한 달 전', 30]];
+  }
+  function distM(a, b) {
+    const dy = (a.lat - b.lat) * 111320, dx = (a.lng - b.lng) * 111320 * Math.cos(a.lat * Math.PI / 180);
+    return Math.hypot(dx, dy);
+  }
+  function lastNoticeDate() {
+    let m = '';
+    D.lost.items.forEach(it => { const d = it.posted || it.date; if (d > m) m = d; });
+    return m;
+  }
+
+  function openFind() {
+    if (!find.date) find.date = addDays(TODAY, -1);
+    const zones = {};
+    D.base.places.forEach(p => (zones[p.zone] ||= []).push(p));
+    const opt = (v, t) => `<option value="${v}"${find.where === v ? ' selected' : ''}>${esc(t)}</option>`;
+    const whereOpts = opt('', '잘 모르겠어요 (공원 전체)') +
+      `<optgroup label="공연장">${D.base.venues.map(v => opt('v:' + v.id, v.name)).join('')}</optgroup>` +
+      Object.entries(zones).map(([z, ps]) => `<optgroup label="${esc(z)}">${ps.map(p => opt('p:' + p.id, p.name)).join('')}</optgroup>`).join('');
+    showDlg('#dlgFind', `
+      <h2><span class="ic">🔍</span>내 물건 찾기</h2>
+      <p>잃어버린 물건과 날짜를 알려 주시면 <b>공원 안내센터 · 경찰서 · 근처 역</b> 가운데 어디에 있을 수 있는지 한 번에 찾아 드립니다.</p>
+      <h3>1. 무엇을 잃어버렸나요? <small>여러 개 골라도 돼요</small></h3>
+      <div class="chips wrap" id="fCats">${D.base.categories.map(c =>
+        `<button type="button" class="chip${find.cats.has(c.id) ? ' on' : ''}" data-cat="${c.id}">${c.icon} ${esc(c.label)}</button>`).join('')}</div>
+      <h3>2. 언제 잃어버렸나요?</h3>
+      <input type="date" id="fDate" class="inp" value="${find.date}" max="${TODAY}" min="2016-01-01" aria-label="잃어버린 날">
+      <div class="chips wrap" id="fQuick">${quickDays().map(([t, n]) => {
+        const d = addDays(TODAY, -n);
+        return `<button type="button" class="chip${d === find.date ? ' on' : ''}" data-d="${d}">${t}</button>`;
+      }).join('')}</div>
+      <h3>3. 어디쯤이었나요? <small>모르면 그대로 두세요</small></h3>
+      <select id="fWhere" class="inp" aria-label="잃어버린 장소">${whereOpts}</select>
+      <button class="btn" type="button" id="fGo">찾아보기</button>`);
+    const di = $('#fDate');
+    const markQ = () => $$('#fQuick .chip').forEach(x => x.classList.toggle('on', x.dataset.d === find.date));
+    $('#fCats').onclick = e => {
+      const b = e.target.closest('.chip'); if (!b) return;
+      const id = b.dataset.cat;
+      if (find.cats.has(id)) find.cats.delete(id); else find.cats.add(id);
+      b.classList.toggle('on', find.cats.has(id));
+    };
+    di.onchange = () => { if (di.value) { find.date = di.value; markQ(); } };
+    $('#fQuick').onclick = e => { const b = e.target.closest('.chip'); if (!b) return; find.date = b.dataset.d; di.value = find.date; markQ(); };
+    $('#fGo').onclick = () => { find.where = $('#fWhere').value; if (di.value) find.date = di.value; showFindResult(); };
+  }
+
+  function showFindResult() {
+    const from = find.date, to = addDays(find.date, FIND_WINDOW);
+    const inWin = d => d && d >= from && d <= to;
+    const want = it => !find.cats.size || find.cats.has(it.cat);
+    let anchor = null, anchorName = '';
+    if (find.where.startsWith('v:')) { anchor = IDX.venue[find.where.slice(2)]; anchorName = anchor && anchor.name; }
+    else if (find.where.startsWith('p:')) { anchor = IDX.place[find.where.slice(2)]; anchorName = anchor && anchor.name; }
+
+    const tagOf = it => {
+      if (!it.place) return ['unk', '위치 불명'];
+      if (!anchor) return ['', ''];
+      return distM(anchor, IDX.place[it.place]) <= NEAR_M ? ['near', '가까운 곳'] : ['far', '다른 구역'];
+    };
+    const rank = it => ({ near: 0, '': 0, unk: 1, far: 2 })[tagOf(it)[0]];
+    const byRank = (a, b) => rank(a) - rank(b) || a.date.localeCompare(b.date);
+    const park = D.lost.items.filter(it => inWin(it.date) && want(it));
+    const held = park.filter(it => it.status === 'keep' || it.status === 'contacted').sort(byRank);
+    const moved = park.filter(it => it.status === 'transferred').sort(byRank);
+    const returned = park.filter(it => it.status === 'returned').length;
+    const st = D.police.items.filter(it => inWin(it.date) && want(it)).sort((a, b) => a.date.localeCompare(b.date));
+    const row = it => { const [cls, txt] = tagOf(it); return lostRow(it, txt ? `<em class="tag ${cls}">${txt}</em>` : ''); };
+
+    const last = lastNoticeDate();
+    const pending = to > last;          // 아직 공고가 안 올라왔을 수 있는 날이 남아 있다
+    const catTxt = find.cats.size ? [...find.cats].map(id => IDX.cat[id].label).join(', ') : '모든 품목';
+    const tr = moved.length ? D.lost.transfers.filter(t => t.cutoff >= moved[0].date).pop() : null;
+    const sec = (icon, title, n, body) => `<section class="find-sec"><h3>${icon} ${title} <b>${n}건</b></h3>${body}</section>`;
+    showDlg('#dlgFind', `
+      <h2><span class="ic">🔍</span>찾아본 결과</h2>
+      <p class="find-q">${esc(catTxt)} · ${fmtDate(from, true)} 분실${anchor ? ` · ${esc(anchorName)} 부근` : ''}
+        <small>잃어버린 날부터 ${FIND_WINDOW}일 안에 주운 물건을 찾았습니다.</small></p>
+      ${pending ? `<div class="box warn"><b>공원 공고는 ${fmtDate(last, true)}까지 올라와 있어요.</b><br>
+        그 뒤에 주운 물건은 아직 공고 전이라 여기 없을 수 있습니다. 안내센터에 바로 전화해 보세요.</div>` : ''}
+      ${sec('🏢', '공원 안내센터에 있을 수 있어요', held.length, held.length
+        ? `<ul class="list in-dlg">${held.map(row).join('')}</ul><p class="hint2">물건을 누르면 확인 방법과 전화번호가 나옵니다. 찾으러 갈 때는 신분증을 챙기세요.</p>`
+        : '<p class="hint2">조건에 맞는, 지금 보관 중인 물건은 없습니다.</p>')}
+      ${sec('🚓', '경찰서로 넘어갔을 수 있어요', moved.length, moved.length
+        ? `<ul class="list in-dlg">${moved.map(row).join('')}</ul>
+          <div class="box">공원은 습득물을 1개월 보관한 뒤 송파경찰서로 넘깁니다${tr && tr.moved ? `(이 무렵 물건은 ${fmtDate(tr.moved, true)} 이관)` : ''}.<br>
+          <a href="${POLICE_SEARCH_URL}" target="_blank" rel="noopener">경찰민원24 습득물 검색</a>에서 찾거나 경찰민원콜센터 <a href="tel:182">182</a>에 문의하세요.</div>`
+        : '<p class="hint2">그 기간에 경찰서로 넘어간 비슷한 물건은 없습니다.</p>')}
+      ${sec('🚉', '근처 역에 맡겨졌을 수 있어요', st.length, st.length
+        ? `<ul class="list in-dlg">${st.map(policeRow).join('')}</ul><p class="hint2">공원 밖(지하철·역 주변)에서 잃어버렸다면 확인하세요. 주운 곳이 아니라 보관 중인 역입니다.</p>`
+        : `<p class="hint2">공원 주변 역에 보관된 비슷한 물건은 없습니다${dayDiff(TODAY, from) > 180 ? '(역 보관 정보는 최근 6개월만 있습니다)' : ''}.</p>`)}
+      ${returned ? `<p class="hint2">같은 조건의 물건 ${returned}건은 이미 주인에게 돌아갔습니다.</p>` : ''}
+      <div class="box go"><b>여기 없어도 포기하지 마세요</b>
+        <ul><li>평화의 광장 안내센터 <a href="tel:02-2180-3564">02-2180-3564~5</a></li>
+        <li>만남의 광장 안내센터 <a href="tel:02-2180-3566">02-2180-3566</a></li>
+        <li><a href="${LOST_REPORT_URL}" target="_blank" rel="noopener">경찰민원24에 분실 신고</a>를 해 두면 비슷한 습득물이 등록될 때 알기 쉽습니다.</li></ul></div>
+      <button class="btn line" type="button" id="fBack">조건 바꿔서 다시 찾기</button>`);
+    $('#fBack').onclick = openFind;
   }
 
   /* ───────── 안내 ───────── */
@@ -592,6 +744,9 @@
       <h3>장소 사전 내려받기</h3>
       <p>습득 장소 표기를 표준 지점과 좌표로 정리한 사전을 공개합니다. 자유롭게 쓰셔도 됩니다.</p>
       <a class="btn line" href="data/places.csv" download="chajaolpak_places.csv">장소 사전(places.csv) 내려받기</a>
+      <h3>현장 안내용 QR 포스터</h3>
+      <p>안내센터·매표소에 붙일 수 있는 A4 포스터입니다. QR을 찍으면 이 서비스가 열립니다.</p>
+      <a class="btn line" href="poster.html" target="_blank" rel="noopener">QR 포스터 열기·인쇄</a>
       ${unmatched.length ? `<p class="src">아직 사전에 없는 표기: ${unmatched.map(esc).join(', ')}</p>` : ''}
       <h3>개인정보</h3>
       <p>이 서비스는 이용자 정보를 수집하지 않습니다. 경찰청 습득물 품명에 들어 있는 이름은 “홍○○”처럼 가리고, 전화번호·카드번호 형태의 숫자도 가립니다.</p>
@@ -626,6 +781,15 @@
     const byMonth = tally(all, it => it.date.slice(0, 7));
     const mMax = Math.max(1, ...months.map(m => byMonth[m] || 0));
     const first = all.length ? all[all.length - 1].date.slice(0, 7) : '';
+    // 공연장별: 과거 공연 건수(공연정보 API, 2024년까지)와 주변 지점 습득물 건수를 나란히
+    const vrows = D.base.venues.filter(v => v.perf && v.id !== 'v_peace').sort((a, b) => b.perf - a.perf).map(v => {
+      const near = new Set(v.near);
+      return { name: shortVenue(v.name), perf: v.perf, lost: located.filter(it => near.has(it.place)).length };
+    });
+    const pMax = Math.max(1, ...vrows.map(r => r.perf)), lMax = Math.max(1, ...vrows.map(r => r.lost));
+    // 주말(토·일) 하루 평균 vs 평일 하루 평균
+    const wkend = ((wd[6] || 0) + (wd[0] || 0)) / 2, wkday = [1, 2, 3, 4, 5].reduce((s, d) => s + (wd[d] || 0), 0) / 5;
+    const wkRatio = wkday ? (wkend / wkday) : 0;
     $('#stats').innerHTML = `
       <div class="card"><h2>습득물 현황 요약</h2>
         <p class="sub">공원 운영 담당자를 위한 요약입니다. 올림픽공원 유실물 정보 ${first} ~ ${TODAY.slice(0, 7)} 습득물 ${all.length}건 기준.</p>
@@ -647,7 +811,16 @@
       <div class="card"><h2>월별 습득 건수 (최근 24개월)</h2>
         <div class="cols">${months.map(m => `<div class="c${(byMonth[m] || 0) === mMax ? ' hi' : ''}" style="height:${((byMonth[m] || 0) / mMax * 100).toFixed(1)}%" title="${m}: ${byMonth[m] || 0}건"></div>`).join('')}</div>
         <div class="cols-x"><span>${months[0]}</span><span>가장 많은 달 ${mMax}건</span><span>${months[23]}</span></div></div>
-      <div class="card"><h2>요일</h2>${bars([1, 2, 3, 4, 5, 6, 0].map(d => [WD[d] + '요일', wd[d] || 0]), 'b3')}</div>
+      <div class="card"><h2>요일</h2>
+        ${wkRatio >= 1.2 ? `<p class="sub"><b>공연·행사가 몰리는 주말</b>에는 하루 평균 습득물이 평일의 <b>${wkRatio.toFixed(1)}배</b>입니다.</p>` : ''}
+        ${bars([1, 2, 3, 4, 5, 6, 0].map(d => [WD[d] + '요일', wd[d] || 0]), 'b3')}</div>
+      ${vrows.length ? `<div class="card"><h2>공연장별 공연 건수와 주변 습득물</h2>
+        <p class="sub">공연 건수는 올림픽공원 공연정보(한국체육산업개발㈜, 2024년까지 ${vrows.reduce((s, r) => s + r.perf, 0).toLocaleString()}건)를 공연장 이름별로 정리한 것이고,
+        습득물은 공연장 반경 약 300m 안 지점 기준(선택 기간)입니다. 공연정보에 날짜가 거의 없어 날짜별 비교는 하지 않았습니다.</p>
+        <div class="vs-head"><span></span><span>공연</span><span>주변 습득물</span></div>
+        ${vrows.map(r => `<div class="vs"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
+          <span class="tr"><span class="fl" style="width:${(r.perf / pMax * 100).toFixed(1)}%"></span><em>${r.perf}</em></span>
+          <span class="tr"><span class="fl b2" style="width:${(r.lost / lMax * 100).toFixed(1)}%"></span><em>${r.lost}</em></span></div>`).join('')}</div>` : ''}
       <div class="card"><h2>구역 · 접수 안내센터</h2>${bars(byZone)}<div style="height:10px"></div>${bars(byCenter, 'b2')}</div>
       <div class="card"><p class="sub" style="margin:0">지점 좌표와 별칭은 ‘안내 → 장소 사전 내려받기’에서 CSV로 받을 수 있습니다.</p></div>`;
     $$('#stats [data-r]').forEach(b => b.onclick = () => { state.statsRange = b.dataset.r; renderStats(); });
@@ -663,10 +836,18 @@
     }
     initMap(); initSheet(); initFilters();
     $('#btnInfo').addEventListener('click', openInfo);
+    $('#btnFind').addEventListener('click', openFind);
+    $('#findBody').addEventListener('click', e => {
+      const b = e.target.closest('.item'); if (!b) return;
+      if (b.dataset.kind === 'police') openPolice(D.police.items.find(x => x.id === b.dataset.id));
+      else openLost(D.lost.items.find(x => x.id === b.dataset.id));
+    });
     $$('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); }));
     window.addEventListener('resize', () => { layoutPanel(); map.invalidateSize(); });
     render();
     map.whenReady(() => { placeAttribution(); });
+    openFromHash();
+    window.addEventListener('hashchange', openFromHash);
   }
   start();
 })();

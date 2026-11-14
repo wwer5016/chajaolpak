@@ -1,0 +1,11 @@
+# 인증키 — 절대 올리지 않는다
+.env
+.env.*
+!.env.example
+
+__pycache__/
+*.pyc
+*.tmp
+.DS_Store
+Thumbs.db
+.claude/

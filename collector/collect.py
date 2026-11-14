@@ -151,6 +151,24 @@ def load_offline(folder: Path) -> list:
 
 # ------------------------------------------------------------------ 기준 데이터(장소·공연장)
 
+def perf_counts() -> dict[str, int]:
+    """올림픽공원 공연정보(KSCperf, 2024년까지 2,502건)의 공연장 표기별 건수 → 표준 공연장별 공연 건수.
+
+    공연정보 API 에는 공연 날짜가 거의 없어(시간만 적힘) 날짜별 비교는 할 수 없고, 공연장별 누적 건수만 쓴다.
+    """
+    from venues import normalize_venues
+    out: dict[str, int] = {}
+    path = REFERENCE / "venue_names_raw.csv"
+    if not path.exists():
+        return out
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        for i, row in enumerate(csv.reader(f)):
+            if i == 0 or len(row) < 2:
+                continue
+            for vid in normalize_venues(row[0]):
+                out[vid] = out.get(vid, 0) + int(row[1])
+    return out
+
 def build_base(matcher: PlaceMatcher) -> dict:
     places = [{"id": p["id"], "name": p["name"], "lat": p["lat"], "lng": p["lng"], "zone": p["zone"],
                "conf": p["confidence"]} for p in matcher.places]
@@ -159,6 +177,7 @@ def build_base(matcher: PlaceMatcher) -> dict:
         for r in csv.DictReader(f):
             stations.append({"id": r["id"], "name": r["name"], "lines": r["lines"],
                              "lat": float(r["lat"]), "lng": float(r["lng"])})
+    perf = perf_counts()
     venues = []
     with open(REFERENCE / "venues.csv", encoding="utf-8-sig", newline="") as f:
         for r in csv.DictReader(f):
@@ -169,7 +188,7 @@ def build_base(matcher: PlaceMatcher) -> dict:
             st = sorted(((_dist_m(center, s), s["id"]) for s in stations), key=lambda x: x[0])
             venues.append({"id": r["id"], "name": r["name"], "place": r["place_id"], "lat": center["lat"],
                            "lng": center["lng"], "radius": radius, "near": near_ids,
-                           "stations": [sid for _d, sid in st[:2]]})
+                           "stations": [sid for _d, sid in st[:2]], "perf": perf.get(r["id"], 0)})
     return {
         "schema": SCHEMA,
         "categories": category_table(),

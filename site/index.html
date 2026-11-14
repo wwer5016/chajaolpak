@@ -11,7 +11,8 @@
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="lib/leaflet.css">
 <link rel="stylesheet" href="lib/MarkerCluster.css">
-<link rel="stylesheet" href="style.css">
+<!-- app.js·style.css 를 고치면 ?v= 숫자를 올려서, 이용자 브라우저가 옛 파일을 쓰지 않게 한다 -->
+<link rel="stylesheet" href="style.css?v=2">
 </head>
 <body>
 <div id="app" class="app" data-mode="map" data-sheet="half">
@@ -66,6 +67,7 @@
   <div class="stage">
     <div id="map" class="map" aria-label="습득 장소 지도"></div>
     <div class="map-note" id="mapNote" hidden></div>
+    <button class="find-fab" id="btnFind" type="button">🔍 내 물건 찾기</button>
 
     <!-- 목록 시트 -->
     <section class="sheet" id="sheet" aria-label="습득물 목록">
@@ -89,6 +91,11 @@
   <div id="itemBody"></div>
 </dialog>
 
+<dialog id="dlgFind" class="dlg" aria-label="내 물건 찾기">
+  <form method="dialog"><button class="dlg-close" aria-label="닫기">×</button></form>
+  <div id="findBody"></div>
+</dialog>
+
 <dialog id="dlgInfo" class="dlg" aria-label="서비스 안내">
   <form method="dialog"><button class="dlg-close" aria-label="닫기">×</button></form>
   <div id="infoBody"></div>
@@ -97,6 +104,6 @@
 <noscript><p style="padding:16px">이 서비스는 자바스크립트를 켜야 볼 수 있습니다.</p></noscript>
 <script src="lib/leaflet.js"></script>
 <script src="lib/leaflet.markercluster.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=2"></script>
 </body>
 </html>

@@ -91,9 +91,12 @@ python tools/check_no_secrets.py # 인증키가 파일에 섞이지 않았는지
    - `KCISA_LOST_KEY` : 문화공공데이터광장의 올림픽공원 유실물 정보 인증키
    - `DATA_GO_KR_KEY` : 공공데이터포털의 경찰청 습득물 인증키(Decoding)
    - (선택) `KOPIS_KEY` : 있으면 '최근 공연' 고르기가 켜집니다
-4. **파일 올리기** — 저장소 첫 화면의 `uploading an existing file` 을 누르고, 이 폴더 **안의 내용 전부**(`.github`, `collector`, `reference`, `site`, `tests`, `tools`, `README.md` 등)를 끌어다 놓은 뒤 `Commit changes`.
+4. **파일 올리기** — 저장소 첫 화면의 `uploading an existing file` 을 누르고, 이 폴더 **안의 내용 전부**(`collector`, `reference`, `site`, `tests`, `tools`, `README.md` 등)를 끌어다 놓은 뒤 `Commit changes`.
    `.env` 파일은 올리지 마세요.
-5. **확인** — `Actions` 탭에서 "데이터 갱신과 배포"가 초록색 체크로 끝나면 `https://<아이디>.github.io/chajaolpak/` 에서 열립니다.
+5. **배포 설정 파일 만들기** — 웹 업로드는 점(.)으로 시작하는 `.github` 폴더를 빼고 올립니다. 그래서 이 파일은 따로 만들어야 합니다.
+   저장소 첫 화면 `Add file` → `Create new file` → 이름 칸에 `.github/workflows/update.yml` 입력 →
+   이 폴더의 `.github/workflows/update.yml` 내용을 메모장으로 열어 전부 복사해 붙여 넣기 → `Commit changes`.
+6. **확인** — `Actions` 탭에서 "데이터 갱신과 배포"가 초록색 체크로 끝나면 `https://<아이디>.github.io/chajaolpak/` 에서 열립니다.
 
 ## 데이터 갱신
 
