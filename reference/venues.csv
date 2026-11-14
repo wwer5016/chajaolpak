@@ -1,0 +1,10 @@
+id,name,place_id,radius_m,aliases
+v_kspo,KSPO DOME,kspo_dome,320,KSPO DOME|KSPODOME|케이스포돔|체조경기장|올림픽체조경기장|올림픽공원 체조경기장
+v_handball,티켓링크 라이브 아레나(핸드볼경기장),handball,280,티켓링크 라이브 아레나|티켓링크라이브아레나|핸드볼경기장|SK핸드볼경기장|SK올림픽핸드볼경기장|올림픽핸드볼경기장
+v_olympic_hall,올림픽홀·뮤즈라이브,olympic_hall,280,올림픽홀|뮤즈라이브|뮤즈라이브홀
+v_woori,우리금융아트홀,woori_hall,260,우리금융아트홀|우리금용아트홀|우이금융아트홀|역도경기장|올림픽역도경기장
+v_lawn88,88잔디마당,lawn88,300,88잔디마당|88 잔디마당|88마당|잔디마당
+v_lake_stage,88호수 수변무대,lake88_stage,260,88호수 수변무대|88호수수변무대|수변무대
+v_kart,K-아트홀,k_art_hall,260,K-아트홀|K아트홀|태권도공연장
+v_velodrome,벨로드롬,velodrome,260,벨로드롬|올림픽벨로드롬|올팍축구장|OL PARK 축구장
+v_peace,평화의 광장,peace_plaza,300,평화의광장|평화의 광장
