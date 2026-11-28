@@ -81,7 +81,7 @@
       if (it.status === 'returned' && !state.showReturned) return false;
       if (it.status === 'transferred' && !state.showTransferred) return false;
       if (state.period !== 'all') return age <= +state.period;
-      // '전체 보관 중': 이관·반환된 물건은 최근 1년 것만
+      // '전체': 보관 중·연락 완료는 기간 제한 없이, 이관·반환된 물건(켰을 때)은 최근 1년 것만
       return (it.status === 'keep' || it.status === 'contacted') || age <= 365;
     });
   }
@@ -286,7 +286,22 @@
     });
     $('#sheetDesc').addEventListener('click', e => {
       if (e.target.dataset.act === 'allStations') { e.preventDefault(); state.station = null; renderList(current()); }
+      if (e.target.dataset.act === 'find') { e.preventDefault(); openFind(); }
     });
+  }
+
+  /* 보관 중인 물건이 적을 때(공원은 1개월 뒤 경찰서로 이관) 첫 화면이 비지 않게:
+   * 최근 이관 물건도 회색 핀으로 함께 보여 주고, 기간은 최근 30일(그래도 적으면 전체)로 시작한다. */
+  const QUIET_BELOW = 5;
+  function applyQuietDefault() {
+    const active = D.lost.items.filter(it => it.status === 'keep' || it.status === 'contacted').length;
+    if (active >= QUIET_BELOW) return;
+    const recent = D.lost.items.filter(it => it.date && it.status !== 'returned' && dayDiff(TODAY, it.date) <= 30).length;
+    state.quiet = { active };
+    state.showTransferred = true;
+    state.period = recent >= QUIET_BELOW ? '30' : 'all';
+    $('#tgTransferred').checked = true;
+    $$('.seg [data-period]').forEach(b => b.classList.toggle('on', b.dataset.period === state.period));
   }
 
   const badge = it => `<span class="badge ${it.status === 'keep' ? '' : it.status}">${STATUS[it.status]}</span>`;
@@ -346,6 +361,12 @@
         ' 이름 등 개인정보는 가렸습니다.';
       html = stItems.map(policeRow).join('') ||
         `<li class="empty">${!vn && !state.showStations ? '‘주변 역 습득물’을 켜면 표시됩니다.' : '조건에 맞는 역 보관 습득물이 없습니다.'}</li>`;
+    }
+    // 보관 중인 물건이 적어 최근 이관 물건까지 함께 보여 주는 중이면, 그 이유를 맨 위에 한 줄로
+    if (state.quiet && state.mode === 'map' && state.tab !== 'station' && state.showTransferred) {
+      desc = `<span class="quiet">지금 공원 안내센터에 보관 중인 물건은 <b>${state.quiet.active}건</b>입니다. ` +
+        `<b>회색 핀</b>은 1개월 보관 뒤 <b>경찰서로 넘어간</b> 물건이에요. 눌러서 찾는 법을 보거나 ` +
+        `<a href="#" data-act="find">내 물건 찾기</a>로 한 번에 확인하세요.</span>` + desc;
     }
     // 데이터 기준일: 공원 공고가 언제까지 반영됐는지 늘 보여 준다(실시간이 아니라는 점을 분명히)
     const last = lastNoticeDate();
@@ -848,6 +869,7 @@
       $('#app').dataset.sheet = 'half';
       console.error(e); return;
     }
+    applyQuietDefault();
     initMap(); initSheet(); initFilters();
     $('#btnInfo').addEventListener('click', openInfo);
     $('#btnFind').addEventListener('click', openFind);

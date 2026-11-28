@@ -8,10 +8,12 @@
 하나 다 읽을 때까지 모은다. 그보다 최근의 작은 묶음도 함께 모은다. 중복·수정본 정리는 lost_parser.merge_notices 가 한다.
 
 504 가 잦아서 numOfRows=20, 타임아웃 90초, 지수 백오프 재시도 5회.
+그래도 응답하지 않는 페이지는 건너뛰고(최대 MAX_SKIPPED 쪽) 끝에 한 번 더 시도한다.
 """
 from __future__ import annotations
 
 import math
+import time
 from datetime import datetime, timedelta
 
 from common import FetchError, get_key, http_get, log
@@ -22,6 +24,7 @@ ROWS = 20
 MAX_PAGES = 100                  # 안전장치: 한 번에 거꾸로 읽는 최대 페이지 수(2,000행)
 GAP = timedelta(minutes=10)      # 이보다 시간이 벌어지면 다른 묶음으로 본다
 FULL_MIN_TITLES = 150            # 한 묶음의 서로 다른 제목이 이만큼이면 '전체 덤프'
+MAX_SKIPPED = 3                  # 응답 없는 페이지를 이만큼까지는 건너뛰고 계속 읽는다
 
 
 def _dt(s: str) -> datetime | None:
@@ -53,11 +56,22 @@ def fetch_recent(hint_total: int | None = None, full_min: int = FULL_MIN_TITLES)
         raise FetchError("KCISA_LOST_KEY 가 없습니다")
 
     # 1) 마지막 페이지 찾기 (직전 totalCount 를 알면 바로 그 근처로 간다)
+    #    원본 서버는 특정 페이지만 504 를 계속 내는 때가 있다(2026-11-25~26). 그 페이지는 건너뛰고
+    #    끝에 한 번 더 시도한다. 한 묶음 안에서 공고는 두 번씩 들어 있어 한두 쪽이 빠져도 보통 잃는 것이 없다.
+    skipped: list[int] = []
     page = max(1, math.ceil(hint_total / ROWS)) if hint_total else 1
-    notices, total = _fetch_page(key, page)
+    try:
+        notices, total = _fetch_page(key, page)
+    except FetchError:
+        if page <= 1:
+            raise
+        log(f"  {page}쪽이 응답하지 않아 건너뛰고 {page - 1}쪽부터 읽습니다(끝에 다시 시도)")
+        skipped.append(page)
+        page -= 1
+        notices, total = _fetch_page(key, page)
     for _ in range(4):
         last = max(1, math.ceil(total / ROWS))
-        if page == last and notices:
+        if (page == last or (skipped and page == last - 1)) and notices:
             break
         page = last
         notices, total = _fetch_page(key, page)
@@ -67,7 +81,7 @@ def fetch_recent(hint_total: int | None = None, full_min: int = FULL_MIN_TITLES)
             break
     if not notices:
         raise FetchError("마지막 페이지에 공고가 없습니다")
-    last_page = page
+    last_page = skipped[0] if skipped else page
 
     # 2) 거꾸로 읽기
     rows: list[Notice] = []                   # 최신 → 오래된 순
@@ -95,10 +109,37 @@ def fetch_recent(hint_total: int | None = None, full_min: int = FULL_MIN_TITLES)
         if full_found or page <= 1 or pages >= MAX_PAGES:
             break
         page -= 1
-        notices, _ = _fetch_page(key, page)
         pages += 1
+        try:
+            notices, _ = _fetch_page(key, page)
+        except FetchError:
+            skipped.append(page)
+            if len(skipped) > MAX_SKIPPED:
+                raise FetchError(f"응답하지 않는 페이지가 {len(skipped)}쪽이라 중단합니다: {skipped}")
+            log(f"  {page}쪽이 응답하지 않아 건너뜁니다(끝에 다시 시도)")
+            notices = []
     if not full_found and cur is not None and len(cur["titles"]) >= full_min:
         full_found = True                     # 1쪽까지 다 읽은 경우
+
+    # 3) 건너뛴 페이지를 잠시 뒤 한 번 더. 읽어 온 묶음 시각 범위 안의 행만 보탠다.
+    recovered, still = 0, []
+    if skipped and rows:
+        floor = min(_dt(n.reg_date) for n in rows if _dt(n.reg_date)) - GAP
+        time.sleep(20)
+        for p in skipped:
+            try:
+                extra, _ = _fetch_page(key, p)
+            except FetchError:
+                still.append(p)
+                continue
+            for n in extra:
+                t = _dt(n.reg_date)
+                if t and t >= floor:
+                    rows.append(n)
+                    recovered += 1
+        rows.sort(key=lambda n: n.reg_date, reverse=True)
+        log(f"  건너뛴 {len(skipped)}쪽 재시도: {len(skipped) - len(still)}쪽 성공({recovered}행)"
+            + (f", 끝내 응답 없음 {still}" if still else ""))
     rows.reverse()
     info = {
         "total_count": total,
@@ -109,6 +150,7 @@ def fetch_recent(hint_total: int | None = None, full_min: int = FULL_MIN_TITLES)
         "batches": [{"at": b["newest"].strftime("%Y-%m-%d %H:%M"), "rows": b["rows"], "titles": len(b["titles"])}
                     for b in batches],
         "full_found": full_found,
+        "skipped_pages": still,
     }
     log(f"  유실물: totalCount={total}, 끝에서 {pages}쪽 읽음, 원본 {len(rows)}행, 묶음 " +
         ", ".join(f"{b['at']}({b['rows']}행·제목 {b['titles']}종)" for b in info["batches"]) +
