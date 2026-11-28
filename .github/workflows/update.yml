@@ -1,12 +1,13 @@
 name: 데이터 갱신과 배포
 
-# 하루 3번 공공 API 에서 데이터를 받아 site/data/*.json 을 갱신하고 GitHub Pages 로 배포한다.
+# 하루 6번 공공 API 에서 데이터를 받아 site/data/*.json 을 갱신하고 GitHub Pages 로 배포한다.
+# 원본 서버(504)나 GitHub 배포가 가끔 실패하므로, 횟수를 늘려 하루에 여러 번 기회를 둔다.
 # 인증키는 저장소 Settings → Secrets and variables → Actions 에 넣는다(코드에는 없음).
 
 on:
   schedule:
-    # 한국 시간 10:10, 14:10, 19:10 (cron 은 UTC 기준: 01:10, 05:10, 10:10)
-    - cron: "10 1,5,10 * * *"
+    # 한국 시간 07:10, 10:10, 13:10, 16:10, 19:10, 22:10 (cron 은 UTC 기준)
+    - cron: "10 1,4,7,10,13,22 * * *"
   workflow_dispatch:          # Actions 탭에서 "Run workflow" 로 직접 실행
   push:
     branches: [main]
@@ -26,7 +27,7 @@ jobs:
     timeout-minutes: 30
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy2.outputs.page_url }}
     steps:
       - uses: actions/checkout@v6
 
@@ -68,6 +69,15 @@ jobs:
           path: site
 
       - id: deploy
+        uses: actions/deploy-pages@v5
+        continue-on-error: true      # GitHub 쪽 일시 오류("Deployment failed, try again later") 대비
+
+      - name: 배포 재시도 전 대기
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 90
+
+      - id: deploy2
+        if: steps.deploy.outcome == 'failure'
         uses: actions/deploy-pages@v5
 
       - name: 수집 실패 알림
