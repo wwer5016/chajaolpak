@@ -6,6 +6,12 @@
   const REPO_URL = 'https://github.com/wwer5016/chajaolpak';   // 소스 저장소 주소(안내 창에 링크로 나온다)
   const PARK_BOUNDS = [[37.5122, 127.1108], [37.5268, 127.1322]];
   const STATUS = { keep: '보관 중', contacted: '연락 완료', transferred: '경찰서 이관', returned: '반환 완료' };
+  // 공원 안내도의 구역 이름(올림픽존 등)은 처음 온 사람에게 낯설어, 위치를 알 수 있는 말을 함께 쓴다
+  const ZONE_LABEL = {
+    '올림픽존': '평화의 광장 쪽(서쪽)', '문화역사존': '미술관·박물관 쪽(남쪽)', '익사이팅존': '경기장·공연장 쪽(동쪽)',
+    '자연생태존': '88호수·나홀로나무 쪽(북쪽)', '출입구': '출입구', '주차장': '주차장',
+  };
+  const zoneLabel = z => (z && ZONE_LABEL[z]) || z || null;
   // 경찰청 유실물 포털(LOST112)은 2026년부터 '경찰민원24'로 통합됐다. 습득물 검색 화면 주소.
   const POLICE_SEARCH_URL = 'https://minwon24.police.go.kr/cvlcpt/cvlcptAply.do?cvlcptId=MW-201';
   const DAY = 86400000;
@@ -185,8 +191,11 @@
         m.on('click', () => openLost(it));
         ms.push(m);
       });
-      L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'lbl', html: `<i>${esc(p.name)}</i>`, iconSize: [0, 0] }), interactive: false, keyboard: false })
-        .addTo(labelLayer);
+      // 공연장 모드에서는 공연장 이름표가 따로 있어 지점 이름표가 겹친다 → 지도 모드에서만 표시
+      if (state.mode === 'map') {
+        L.marker([p.lat, p.lng], { icon: L.divIcon({ className: 'lbl', html: `<i>${esc(p.name)}</i>`, iconSize: [0, 0] }), interactive: false, keyboard: false })
+          .addTo(labelLayer);
+      }
     }
     cluster.addLayers(ms);
 
@@ -314,6 +323,10 @@
     // 보관 중인데 1개월(보관 기한)이 지났으면 이미 경찰서로 넘어갔을 수 있다
     if ((it.status === 'keep' || it.status === 'contacted') && dayDiff(TODAY, it.date) > 30) {
       extra = `<em class="tag unk" title="보관 기한(1개월)이 지나 경찰서로 넘어갔을 수 있습니다">기한 지남</em>` + extra;
+    }
+    // 이관됐더라도 안내센터가 주인과 연락한 기록이 있으면 알려 준다
+    if (it.status === 'transferred' && contactedNote(it)) {
+      extra = `<em class="tag" title="이관 전에 안내센터가 주인과 연락했습니다">주인과 연락됨</em>` + extra;
     }
     return `<li><button class="item" type="button" data-id="${it.id}">
       <span class="ic">${c.icon}</span>
@@ -467,7 +480,9 @@
       const b = e.target.closest('.chip'); if (!b) return;
       const s = shows[+b.dataset.i];
       // 공연 첫날부터(오래 하는 공연은 최근 2주만)
-      const d = s.from < addDays(TODAY, -14) && s.to >= addDays(TODAY, -14) ? addDays(TODAY, -14) : s.from;
+      // 공연 첫날부터 본다. 다만 2주 넘게 이어지는 장기 공연(뮤지컬 등)은 최근 2주만 본다.
+      const longRun = dayDiff(s.to, s.from) > 14;
+      const d = longRun && s.from < addDays(TODAY, -14) ? addDays(TODAY, -14) : s.from;
       state.venueDate = d > TODAY ? TODAY : d; $('#venueDate').value = state.venueDate; markQuick();
       $$('#showChips .chip').forEach(x => x.classList.toggle('on', x === b));
       if (state.venue !== s.venue) selectVenue(s.venue); else render();
@@ -539,15 +554,22 @@
         <li>전화 문의: 경찰민원콜센터 <a href="tel:182">182</a></li></ul>
         ${age > 180 ? '<small>습득 후 6개월이 지나 보관 기간이 끝났을 수 있습니다.</small>' : ''}</div>`;
     } else {
+      // 실제 이관은 습득일마다 따로가 아니라 '한 달에 한 번쯤 모아서' 일괄로 한다(이관 공지 기준).
+      // 그래서 남은 날짜를 세어 보여 주지 않고, 최근 이관 시점과 '방문 전 전화'를 안내한다.
       const overdue = TODAY > due;
+      const lastTr = (D.lost.transfers || [])[0];
       guide = `<div class="box go"><b>찾으러 가는 방법</b>
-        <ol><li>먼저 ${center ? esc(center.name) : '안내센터'}에 전화해 물건이 맞는지 확인하세요.</li>
+        <ol><li>먼저 ${center ? esc(center.name) : '안내센터'}에 전화해 물건이 아직 있는지 확인하세요.</li>
         <li><b>신분증</b>을 가지고 안내센터를 방문하세요. 본인 확인 뒤 돌려드립니다.</li>
         <li>운영 시간 09:00~19:00 (휴게 12:00~13:00)</li></ol></div>
-        <div class="box${overdue ? ' warn' : ''}">습득일로부터 <b>1개월 보관</b> 후 관할 경찰서(송파경찰서)로 이관됩니다.<br>
-        ${overdue ? `<b>보관 기간(${fmtDate(due)}까지)이 지났습니다.</b> 이미 이관됐을 수 있으니 방문 전에 꼭 전화로 확인하세요.`
-          : `이 물건은 <b>${fmtDate(due)}</b> 무렵 이관될 수 있습니다(${dayDiff(due, TODAY)}일 남음).`}
-        ${it.status === 'contacted' ? '<br>안내센터가 주인과 이미 연락한 물건입니다.' : ''}</div>`;
+        <div class="box warn">공원은 습득물을 <b>1개월쯤 보관한 뒤, 보통 한 달에 한 번 모아서</b> 관할 경찰서(송파경찰서)로 넘깁니다.
+        ${lastTr && lastTr.moved ? `최근에는 ${fmtDate(lastTr.moved, true)}에 ${fmtDate(lastTr.cutoff)}까지 주운 물건을 넘겼습니다.` : ''}<br>
+        ${overdue ? `<b>습득 후 1개월이 지났습니다.</b> 이미 넘어갔을 수 있습니다.` : '다음 이관 날짜는 미리 알 수 없습니다.'}
+        <b>방문 전에 꼭 전화로 확인하세요.</b>
+        ${it.status === 'contacted' || contactedNote(it) ? '<br>안내센터가 주인과 이미 연락한 물건입니다.' : ''}</div>`;
+    }
+    if (it.status === 'transferred' && contactedNote(it)) {
+      guide += '<p class="hint2">이 물건은 이관 전에 안내센터가 주인과 연락한 기록(비고)이 있습니다.</p>';
     }
     const tel = center && it.status !== 'returned' && it.status !== 'transferred'
       ? `<a class="btn" href="tel:${center.tel}">📞 ${esc(center.name)} ${esc(center.tel_text)}</a>` : '';
@@ -559,7 +581,7 @@
         <dt>습득일</dt><dd>${fmtDate(it.date, true)}</dd>
         <dt>수량</dt><dd>${esc(it.qty || '1')}</dd>
         <dt>습득 장소</dt><dd>${esc(it.place_raw || '공원 내')}
-          <small>${p ? `지도 지점: ${esc(p.name)} (${esc(p.zone)})${p.conf === 'high' ? '' : ' · 위치는 추정값'}` : '지점이 적히지 않아 지도에 표시할 수 없습니다(공원 전체).'}</small></dd>
+          <small>${p ? `지도 지점: ${esc(p.name)} (${esc(zoneLabel(p.zone))})${p.conf === 'high' ? '' : ' · 위치는 추정값'}` : '지점이 적히지 않아 지도에 표시할 수 없습니다(공원 전체).'}</small></dd>
         <dt>확인 방법</dt><dd>${esc(it.desc || '안내센터 문의')}<small>본인 확인에 쓰는 항목입니다.</small></dd>
         ${it.note ? `<dt>비고</dt><dd>${esc(it.note)}</dd>` : ''}
         <dt>보관</dt><dd>${center ? `${esc(center.name)}<small>${esc(center.tel_text)}</small>` : '올림픽공원 안내센터'}</dd>
@@ -662,9 +684,9 @@
     const zones = {};
     D.base.places.forEach(p => (zones[p.zone] ||= []).push(p));
     const opt = (v, t) => `<option value="${v}"${find.where === v ? ' selected' : ''}>${esc(t)}</option>`;
+    // 공연장도 지점 목록 안에 있으므로 따로 묶지 않는다(같은 이름이 두 번 나오지 않게)
     const whereOpts = opt('', '잘 모르겠어요 (공원 전체)') +
-      `<optgroup label="공연장">${D.base.venues.map(v => opt('v:' + v.id, v.name)).join('')}</optgroup>` +
-      Object.entries(zones).map(([z, ps]) => `<optgroup label="${esc(z)}">${ps.map(p => opt('p:' + p.id, p.name)).join('')}</optgroup>`).join('');
+      Object.entries(zones).map(([z, ps]) => `<optgroup label="${esc(zoneLabel(z))}">${ps.map(p => opt('p:' + p.id, p.name)).join('')}</optgroup>`).join('');
     showDlg('#dlgFind', `
       <h2><span class="ic">🔍</span>내 물건 찾기</h2>
       <p>잃어버린 물건과 날짜를 알려 주시면 <b>공원 안내센터 · 경찰서 · 근처 역</b> 가운데 어디에 있을 수 있는지 한 번에 찾아 드립니다.</p>
@@ -775,9 +797,11 @@
         ${(D.shows.shows || []).length ? `<tr><th>최근 공연</th><td>출처: (재)예술경영지원센터 공연예술통합전산망(<a href="https://www.kopis.or.kr" target="_blank" rel="noopener">www.kopis.or.kr</a>)<br><small>${fmtStamp(D.shows.updated)} 갱신 · 올림픽공원 공연 ${D.shows.shows.length}건</small></td></tr>` : ''}
         <tr><th>지도</th><td>© OpenStreetMap 기여자 (ODbL)</td></tr>
       </table>
-      <p>데이터는 하루 3번 자동으로 갱신됩니다. 실제 보관 여부는 반드시 안내센터에 전화로 확인하세요.</p>
+      <p>데이터는 하루 6번 자동으로 갱신됩니다(원본 기관이 공고를 올려야 반영됩니다). 실제 보관 여부는 반드시 안내센터에 전화로 확인하세요.</p>
       <h3>장소 사전 내려받기</h3>
-      <p>습득 장소 표기를 표준 지점과 좌표로 정리한 사전을 공개합니다. 자유롭게 쓰셔도 됩니다.</p>
+      <p>습득 장소 표기를 표준 지점과 좌표로 정리한 사전을 공개합니다. 좌표 일부가 OpenStreetMap에서 왔기 때문에
+      <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noopener">ODbL 1.0</a> 조건(출처 표시, 고친 사전도 같은 조건으로 공개)으로 쓰실 수 있습니다.
+      서비스 소스 코드는 MIT 라이선스입니다.</p>
       <a class="btn line" href="data/places.csv" download="chajaolpak_places.csv">장소 사전(places.csv) 내려받기</a>
       <h3>현장 안내용 QR 포스터</h3>
       <p>안내센터·매표소에 붙일 수 있는 A4 포스터입니다. QR을 찍으면 이 서비스가 열립니다.</p>
@@ -796,19 +820,39 @@
   }
   const tally = (arr, fn) => { const o = {}; arr.forEach(x => { const k = fn(x); if (k != null) o[k] = (o[k] || 0) + 1; }); return o; };
   const top = (o, n) => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, n);
+  // 안내센터가 있는 지점: 습득장소가 '주운 곳'이 아니라 '맡긴 곳'으로 적혔을 수 있어 분석에서 따로 다룬다
+  const CENTER_PLACES = new Set(['peace_plaza', 'meeting_plaza']);
+  // 각 지점을 반경 안에서 가장 가까운 공연장 '한 곳'에만 배정한다(두 공연장에 겹쳐 세지 않도록)
+  let VENUE_OF = null;
+  function venueOf(pid) {
+    if (!VENUE_OF) {
+      VENUE_OF = {};
+      const vs = D.base.venues.filter(v => v.id !== 'v_peace');
+      D.base.places.forEach(p => {
+        let best = null, bd = Infinity;
+        vs.forEach(v => { const d = distM(p, v); if (d <= v.radius && d < bd) { bd = d; best = v.id; } });
+        VENUE_OF[p.id] = best;
+      });
+    }
+    return VENUE_OF[pid] || null;
+  }
+  const contactedNote = it => it.status !== 'returned' && /연락/.test(it.note || '');
+
   function renderStats() {
     const all = D.lost.items.filter(it => it.date);
     const from = state.statsRange === 'year' ? addDays(TODAY, -365) : (state.statsRange === '2025' ? '2025-01-01' : '0000');
     const items = all.filter(it => it.date >= from);
     const n = items.length || 1;
     const held = all.filter(it => it.status === 'keep' || it.status === 'contacted').length;
-    const done = items.filter(it => it.status === 'returned' || it.note.includes('연락')).length;
+    const returned = items.filter(it => it.status === 'returned').length;
+    const contacted = items.filter(contactedNote).length;
     const located = items.filter(it => it.place);
-    const venueSet = new Set(D.base.venues.filter(v => v.id !== 'v_peace').flatMap(v => v.near));
-    const nearVenue = located.filter(it => venueSet.has(it.place)).length;
-    const byPlace = top(tally(located, it => IDX.place[it.place]?.name), 12);
+    const field = located.filter(it => !CENTER_PLACES.has(it.place));          // 안내센터 지점을 뺀 나머지
+    const atCenter = located.length - field.length;
+    const nearVenue = field.filter(it => venueOf(it.place)).length;
+    const byPlace = top(tally(located, it => IDX.place[it.place] ? IDX.place[it.place].name + (CENTER_PLACES.has(it.place) ? ' (안내센터)' : '') : null), 12);
     const byCat = top(tally(items, it => IDX.cat[it.cat]?.label), 12);
-    const byZone = top(tally(located, it => IDX.place[it.place]?.zone), 8);
+    const byZone = top(tally(located, it => zoneLabel(IDX.place[it.place]?.zone)), 8);
     const byCenter = top(tally(items, it => IDX.center[it.center]?.name), 2);
     const wd = tally(items, it => new Date(ts(it.date)).getUTCDay());
     const months = [];
@@ -817,17 +861,17 @@
     const mMax = Math.max(1, ...months.map(m => byMonth[m] || 0));
     const first = all.length ? all[all.length - 1].date.slice(0, 7) : '';
     // 공연장별: 과거 공연 건수(공연정보 API, 2024년까지)와 주변 지점 습득물 건수를 나란히
-    const vrows = D.base.venues.filter(v => v.perf && v.id !== 'v_peace').sort((a, b) => b.perf - a.perf).map(v => {
-      const near = new Set(v.near);
-      return { name: shortVenue(v.name), perf: v.perf, lost: located.filter(it => near.has(it.place)).length };
-    });
+    const vrows = D.base.venues.filter(v => v.perf && v.id !== 'v_peace').sort((a, b) => b.perf - a.perf).map(v => (
+      { name: shortVenue(v.name), perf: v.perf, lost: field.filter(it => venueOf(it.place) === v.id).length }));
     const pMax = Math.max(1, ...vrows.map(r => r.perf)), lMax = Math.max(1, ...vrows.map(r => r.lost));
     // 주말(토·일) 하루 평균 vs 평일 하루 평균
     const wkend = ((wd[6] || 0) + (wd[0] || 0)) / 2, wkday = [1, 2, 3, 4, 5].reduce((s, d) => s + (wd[d] || 0), 0) / 5;
     const wkRatio = wkday ? (wkend / wkday) : 0;
+    const pct = x => `${(x / n * 100).toFixed(1)}%`;
     $('#stats').innerHTML = `
       <div class="card"><h2>습득물 현황 요약</h2>
-        <p class="sub">공원 운영 담당자를 위한 요약입니다. 올림픽공원 유실물 정보 ${first} ~ ${TODAY.slice(0, 7)} 습득물 ${all.length}건 기준.</p>
+        <p class="sub">공원 운영 담당자를 위한 요약입니다. 올림픽공원 유실물 정보 ${first} ~ ${TODAY.slice(0, 7)} 습득물 ${all.length}건,
+        <b>${fmtDate(TODAY, true).replace(/\(.\)/, '')} 기준</b>(공원 공고 ${fmtDate(lastNoticeDate(), true).replace(/\(.\)/, '')}까지 반영)이며 매일 자동으로 바뀝니다.</p>
         <div class="seg small" role="group" aria-label="집계 기간">
           <button type="button" data-r="all" class="${state.statsRange === 'all' ? 'on' : ''}">전체 기간</button>
           <button type="button" data-r="2025" class="${state.statsRange === '2025' ? 'on' : ''}">2025년 이후</button>
@@ -836,27 +880,30 @@
       <div class="kpis">
         <div class="kpi"><b>${items.length}</b><span>습득물(선택 기간)</span></div>
         <div class="kpi"><b>${held}</b><span>지금 안내센터 보관 중</span></div>
-        <div class="kpi"><b>${Math.round(done / n * 100)}%</b><span>반환·연락 완료 비율</span></div>
-        <div class="kpi"><b>${Math.round(located.length / n * 100)}%</b><span>습득 지점이 기록된 비율</span></div>
+        <div class="kpi"><b>${pct(returned)}</b><span>반환 완료 (${returned}건)</span></div>
+        <div class="kpi"><b>${pct(contacted)}</b><span>주인과 연락 완료 (${contacted}건)</span></div>
       </div>
-      <div class="card"><h2>습득이 많은 지점</h2><p class="sub">순찰·안내 표지 우선순위를 정할 때 참고할 수 있습니다.</p>${bars(byPlace) || '<p class="sub">자료 없음</p>'}</div>
-      <div class="card"><h2>공연장 주변과 그 밖</h2><p class="sub">공연장(KSPO DOME, 핸드볼경기장, 올림픽홀, 우리금융아트홀, 88잔디마당 등) 반경 약 300m 안 지점 기준.</p>
-        ${bars([['공연장 주변 지점', nearVenue], ['그 밖의 지점', located.length - nearVenue], ['위치 불명', items.length - located.length]], 'b2')}</div>
+      <div class="card"><h2>습득이 많은 지점</h2>
+        <p class="sub">습득물의 ${pct(located.length)}에 지점이 적혀 있습니다. ‘(안내센터)’ 표시 지점은 안내센터가 있는 곳이라, 주운 곳이 아니라 <b>맡긴 곳</b>으로 적혔을 수 있습니다. 순찰·안내 우선순위는 그 밖의 지점을 함께 보세요.</p>
+        ${bars(byPlace) || '<p class="sub">자료 없음</p>'}</div>
+      <div class="card"><h2>공연장 주변과 그 밖</h2><p class="sub">각 지점을 반경 약 300m 안에서 가장 가까운 공연장 <b>한 곳</b>에만 셉니다. 안내센터 지점은 맡긴 곳일 수 있어 따로 나눴습니다.</p>
+        ${bars([['공연장 주변 지점', nearVenue], ['그 밖의 지점', field.length - nearVenue], ['안내센터 지점', atCenter], ['위치 불명', items.length - located.length]], 'b2')}</div>
       <div class="card"><h2>품목</h2>${bars(byCat)}</div>
       <div class="card"><h2>월별 습득 건수 (최근 24개월)</h2>
         <div class="cols">${months.map(m => `<div class="c${(byMonth[m] || 0) === mMax ? ' hi' : ''}" style="height:${((byMonth[m] || 0) / mMax * 100).toFixed(1)}%" title="${m}: ${byMonth[m] || 0}건"></div>`).join('')}</div>
         <div class="cols-x"><span>${months[0]}</span><span>가장 많은 달 ${mMax}건</span><span>${months[23]}</span></div></div>
       <div class="card"><h2>요일</h2>
-        ${wkRatio >= 1.2 ? `<p class="sub"><b>공연·행사가 몰리는 주말</b>에는 하루 평균 습득물이 평일의 <b>${wkRatio.toFixed(1)}배</b>입니다.</p>` : ''}
+        ${wkRatio >= 1.2 ? `<p class="sub"><b>공연·행사가 몰리는 주말</b>에는 습득물이 평일의 <b>${wkRatio.toFixed(1)}배</b>입니다.
+          (토·일 요일당 평균 ${wkend.toFixed(1)}건 ÷ 월~금 요일당 평균 ${wkday.toFixed(1)}건)</p>` : ''}
         ${bars([1, 2, 3, 4, 5, 6, 0].map(d => [WD[d] + '요일', wd[d] || 0]), 'b3')}</div>
       ${vrows.length ? `<div class="card"><h2>공연장별 공연 건수와 주변 습득물</h2>
         <p class="sub">공연 건수는 올림픽공원 공연정보(한국체육산업개발㈜, 2024년까지 ${vrows.reduce((s, r) => s + r.perf, 0).toLocaleString()}건)를 공연장 이름별로 정리한 것이고,
-        습득물은 공연장 반경 약 300m 안 지점 기준(선택 기간)입니다. 공연정보에 날짜가 거의 없어 날짜별 비교는 하지 않았습니다.</p>
+        습득물은 가장 가까운 공연장 한 곳에만 센 주변 지점 기준(안내센터 지점 제외, 선택 기간)입니다. 공연정보에 날짜가 거의 없어 날짜별 비교는 하지 않았습니다.</p>
         <div class="vs-head"><span></span><span>공연</span><span>주변 습득물</span></div>
         ${vrows.map(r => `<div class="vs"><span class="nm" title="${esc(r.name)}">${esc(r.name)}</span>
           <span class="tr"><span class="fl" style="width:${(r.perf / pMax * 100).toFixed(1)}%"></span><em>${r.perf}</em></span>
           <span class="tr"><span class="fl b2" style="width:${(r.lost / lMax * 100).toFixed(1)}%"></span><em>${r.lost}</em></span></div>`).join('')}</div>` : ''}
-      <div class="card"><h2>구역 · 접수 안내센터</h2>${bars(byZone)}<div style="height:10px"></div>${bars(byCenter, 'b2')}</div>
+      <div class="card"><h2>공원 구역 · 접수 안내센터</h2>${bars(byZone)}<div style="height:10px"></div>${bars(byCenter, 'b2')}</div>
       <div class="card"><p class="sub" style="margin:0">지점 좌표와 별칭은 ‘안내 → 장소 사전 내려받기’에서 CSV로 받을 수 있습니다.</p></div>`;
     $$('#stats [data-r]').forEach(b => b.onclick = () => { state.statsRange = b.dataset.r; renderStats(); });
   }
